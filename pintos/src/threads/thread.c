@@ -336,7 +336,7 @@ void handle_blocked_threads(struct thread *t, void *aux UNUSED)
 {
   if (t->status == THREAD_BLOCKED && t->blocked_time > 0)
   {
-    t->status--;
+    t->blocked_time--;
     if (!t->blocked_time)
       thread_unblock(t);    
   }
