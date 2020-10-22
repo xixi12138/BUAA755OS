@@ -11,10 +11,27 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+
+#include "threads/float.h"
+#include <stdint.h>
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
 
+typedef int64_t fixed_t;
+
+#define SHIFT_AMOUNT 14
+#define INT2FLOAT(n) ((fixed_t)(n << SHIFT_AMOUNT))
+#define FLOAT2INTPART(x) (x >> SHIFT_AMOUNT)
+#define FLOAT2INTNEAR(x) (x >= 0 ? ((x + (1 << (SHIFT_AMOUNT - 1))) >> SHIFT_AMOUNT) : ((x - (1 << SHIFT_AMOUNT)) >> SHIFT_AMOUNT))
+#define FLOATADDFLOAT(x, y) (x + y)
+#define FLOATSUBFLOAT(x, y) (x - y)
+#define FLOATADDINT(x, n) (x + (n << SHIFT_AMOUNT))
+#define FLOATSUBINT(x, n) (x - (n << SHIFT_AMOUNT))
+#define FLOATMULFLOAT(x, y) ((((int64_t)x) * y) >> SHIFT_AMOUNT)
+#define FLOATMULINT(x, n) (x * n)
+#define FLOATDIVFLOAT(x, y) ((((int64_t)x) << SHIFT_AMOUNT) / y)
+#define FLOATDIVINT(x, n) (x / n)
 /* Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
    of thread.h for details. */
@@ -58,6 +75,7 @@ static unsigned thread_ticks;   /* # of timer ticks since last yield. */
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
+int64_t load_avg;//loading average of the system//
 
 static void kernel_thread (thread_func *, void *aux);
 
@@ -98,6 +116,7 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+  load_avg=0;
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -124,6 +143,20 @@ thread_tick (void)
 {
   struct thread *t = thread_current ();
 
+if(thread_mlfqs){
+	/* 多级反馈队列情况需要recent_cpu + 1 */
+	if(t != idle_thread)
+		t->recent_cpu = FLOATADDINT(t->recent_cpu, 1);
+	/* 每 100 个 timer_ticks(1 s)  更新一次系统的 load_avg */
+	if(timer_ticks() % 100 == 0){
+		renew_load_avg();
+		thread_all_renew();//load_avg变化, recent_cpu也需要全变化
+	}
+	/* 每 4 个 timer_ticks 更新一次优先级 */
+	if(timer_ticks() % 4 == 0){
+		renew_all_priority();
+	}
+}
   /* Update statistics. */
   if (t == idle_thread)
     idle_ticks++;
@@ -350,32 +383,90 @@ void
 thread_set_nice (int nice UNUSED) 
 {
   /* Not yet implemented. */
+  struct thread* cur_thread = thread_current();
+  thread_current() ->nice = nice; //将新nice值赋给当前线程
+  renew_priority(cur_thread);//基于新值重新计算线程优先级
+  if(list_entry(list_begin(&ready_list),struct thread,elem)->priority > thread_get_priority()) thread_yield(); //当前线程优先级非最高则阻塞
 }
 
 /* Returns the current thread's nice value. */
 int
 thread_get_nice (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  /* 返回当前nice值*/
+  return thread_current()->nice;
 }
 
 /* Returns 100 times the system load average. */
 int
 thread_get_load_avg (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  
+  return FLOAT2INTNEAR(FLOATMULINT(load_avg, 100));
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */
 int
 thread_get_recent_cpu (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  
+  return FLOAT2INTNEAR(FLOATMULINT(thread_current()->recent_cpu, 100));;
 }
-
+/* 获得当前就绪队列的大小，空闲线程除外 */
+int64_t
+get_ready_threads(){
+	int64_t num_ready_threads = list_size(&ready_list);
+	if(thread_current() != idle_thread)
+		num_ready_threads++;
+	return num_ready_threads;
+}
+/* 更新单个线程的优先级 */
+void
+renew_priority(struct thread* t){
+	/* priority = PRI_MAX - (recent_cpu / 4) - (nice * 2) */
+	t->priority = PRI_MAX - FLOAT2INTPART(FLOATDIVINT(t->recent_cpu, 4)) - (t->nice * 2);
+	if(t->priority > PRI_MAX)
+		t->priority = PRI_MAX;
+	else if(t->priority < PRI_MIN)
+		t->priority = PRI_MIN;
+}
+
+/* 计算并更新recent_cpu的值 */
+void
+renew_recent_cpu(struct thread* t){
+	/* recent_cpu = (2*load_avg)/(2*load_avg + 1) * recent_cpu + nice */
+	int64_t new_recent_cpu = FLOATDIVFLOAT(FLOATMULINT(load_avg, 2), FLOATADDINT(FLOATMULINT(load_avg, 2), 1));
+	new_recent_cpu = FLOATADDINT(FLOATMULFLOAT(new_recent_cpu, t->recent_cpu), t->nice);
+
+	t->recent_cpu = new_recent_cpu;
+}
+/* 计算并更新load_avg的值 */
+void
+renew_load_avg(void){
+	/* load_avg = (59/60)*load_avg + (1/60)*ready_threads */
+	int64_t new_load_avg_left = FLOATDIVINT(FLOATMULINT(load_avg, 59), 60);
+	int64_t new_load_avg_right = FLOATDIVINT(INT2FLOAT(get_ready_threads()), 60);
+	load_avg = FLOATADDFLOAT(new_load_avg_left, new_load_avg_right);
+}
+
+/* 更新全部线程的优先级 */
+void
+renew_all_priority(){
+	struct list_elem* e;
+	for(e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e)){
+		renew_priority(list_entry(e, struct thread, allelem));
+	}
+	list_sort(&ready_list, cmp_priority, NULL);
+}
+
+/* 更新全部的线程的recent_cpu值 */
+void
+thread_all_renew(void){
+	struct list_elem* e;
+	for(e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e)){
+		renew_recent_cpu(list_entry(e, struct thread, allelem));
+	}
+}
 /* Idle thread.  Executes when no other thread is ready to run.
 
    The idle thread is initially put on the ready list by
@@ -577,6 +668,10 @@ allocate_tid (void)
   lock_release (&tid_lock);
 
   return tid;
+}
+bool 
+cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux){
+	return (list_entry(a,struct thread,elem)->priority > list_entry(b,struct thread,elem)->priority);
 }
 
 /* Offset of `stack' member within `struct thread'.
