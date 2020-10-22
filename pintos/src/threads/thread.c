@@ -231,6 +231,7 @@ thread_create (const char *name, int priority,
   sf->eip = switch_entry;
   sf->ebp = 0;
 
+  t->blocked_time = 0;
   /* Add to run queue. */
   thread_unblock (t);
 
@@ -362,6 +363,16 @@ thread_foreach (thread_action_func *func, void *aux)
       struct thread *t = list_entry (e, struct thread, allelem);
       func (t, aux);
     }
+}
+
+void handle_blocked_threads(struct thread *t, void *aux UNUSED)
+{
+  if (t->status == THREAD_BLOCKED && t->blocked_time > 0)
+  {
+    t->blocked_time--;
+    if (!t->blocked_time)
+      thread_unblock(t);    
+  }
 }
 
 /* Sets the current thread's priority to NEW_PRIORITY. */
