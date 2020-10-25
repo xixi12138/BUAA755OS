@@ -234,7 +234,9 @@ thread_create (const char *name, int priority,
   t->blocked_time = 0;
   /* Add to run queue. */
   thread_unblock (t);
-
+  if (thread_current ()->priority < priority) {
+    thread_yield ();
+  }
   return tid;
 }
 
@@ -271,7 +273,8 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+  list_insert_ordered(&ready_list, &t->elem, (list_less_func *)cmp_priority, NULL);
+  // list_push_back (&ready_list, &t->elem);
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -342,7 +345,8 @@ thread_yield (void)
 
   old_level = intr_disable ();
   if (cur != idle_thread) 
-    list_push_back (&ready_list, &cur->elem);
+    list_insert_ordered(&ready_list, &cur->elem, (list_less_func *)cmp_priority, NULL);
+    // list_push_back (&ready_list, &cur->elem);
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -380,6 +384,7 @@ void
 thread_set_priority (int new_priority) 
 {
   thread_current ()->priority = new_priority;
+  thread_yield ();
 }
 
 /* Returns the current thread's priority. */
@@ -567,7 +572,8 @@ init_thread (struct thread *t, const char *name, int priority)
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();
-  list_push_back (&all_list, &t->allelem);
+  list_insert_ordered(&all_list, &t->allelem, (list_less_func *)cmp_priority, NULL);
+  // list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
 }
 
@@ -680,11 +686,12 @@ allocate_tid (void)
 
   return tid;
 }
+
 bool 
-cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux){
+cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED){
 	return (list_entry(a,struct thread,elem)->priority > list_entry(b,struct thread,elem)->priority);
 }
-
+
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
