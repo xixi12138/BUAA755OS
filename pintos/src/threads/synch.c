@@ -31,6 +31,13 @@
 #include <string.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+/*
+自定义比较函数
+*/
+// bool
+// higher_priority(const struct list_elem *a, const struct list_elem *b, void *aux) {
+//   return list_entry (a, struct thread, elem)->priority > list_entry(b, struct thread, elem)->priority;
+// }
 
 /* Initializes semaphore SEMA to VALUE.  A semaphore is a
    nonnegative integer along with two atomic operators for
@@ -52,7 +59,7 @@ sema_init (struct semaphore *sema, unsigned value)
 
 /* Down or "P" operation on a semaphore.  Waits for SEMA's value
    to become positive and then atomically decrements it.
-
+   占有信号量,信号量-1
    This function may sleep, so it must not be called within an
    interrupt handler.  This function may be called with
    interrupts disabled, but if it sleeps then the next scheduled
@@ -103,8 +110,9 @@ sema_try_down (struct semaphore *sema)
 
 /* Up or "V" operation on a semaphore.  Increments SEMA's value
    and wakes up one thread of those waiting for SEMA, if any.
-
+  释放信号量, 信号量+1
    This function may be called from an interrupt handler. */
+   // 在waiter中取出priority最高的thread并yield当前线程, 重新调度
 void
 sema_up (struct semaphore *sema) 
 {
@@ -113,11 +121,16 @@ sema_up (struct semaphore *sema)
   ASSERT (sema != NULL);
 
   old_level = intr_disable ();
-  if (!list_empty (&sema->waiters)) 
-    thread_unblock (list_entry (list_pop_front (&sema->waiters),
-                                struct thread, elem));
+  if (!list_empty (&sema->waiters)) {
+    // sort 然后pop掉最高优先级的, 然后unblock最高优先级的, 也可以像注释这样find max然后remove掉
+    // struct list_elem * highest_thread = list_max(&sema->waiters, higher_priority, NULL);
+    // struct list_elem * _next = list_remove(highest_thread);
+    list_sort(&sema->waiters, cmp_priority, NULL);
+    thread_unblock (list_entry (list_pop_front (&sema->waiters), struct thread, elem));
+  }
   sema->value++;
   intr_set_level (old_level);
+  thread_yield(); // yield掉当前线程,重新调度
 }
 
 static void sema_test_helper (void *sema_);
@@ -304,7 +317,7 @@ cond_wait (struct condition *cond, struct lock *lock)
 /* If any threads are waiting on COND (protected by LOCK), then
    this function signals one of them to wake up from its wait.
    LOCK must be held before calling this function.
-
+  这一部分和信号量那一部分一样,实现一个优先队列
    An interrupt handler cannot acquire a lock, so it does not
    make sense to try to signal a condition variable within an
    interrupt handler. */
@@ -316,9 +329,10 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (!intr_context ());
   ASSERT (lock_held_by_current_thread (lock));
 
-  if (!list_empty (&cond->waiters)) 
-    sema_up (&list_entry (list_pop_front (&cond->waiters),
-                          struct semaphore_elem, elem)->semaphore);
+  if (!list_empty (&cond->waiters)) {
+    list_sort(&cond->waiters, cmp_priority_sema, NULL);
+    sema_up (&list_entry (list_pop_front (&cond->waiters), struct semaphore_elem, elem)->semaphore);
+  }
 }
 
 /* Wakes up all threads, if any, waiting on COND (protected by
@@ -335,4 +349,11 @@ cond_broadcast (struct condition *cond, struct lock *lock)
 
   while (!list_empty (&cond->waiters))
     cond_signal (cond, lock);
+}
+
+bool cmp_priority_sema(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED){
+  struct semaphore_elem *sa = list_entry (a, struct semaphore_elem, elem);
+  struct semaphore_elem *sb = list_entry (b, struct semaphore_elem, elem);
+  // 比较所有信号量最高优先级的thread, 以此来确定条件变量先唤醒哪个信号量
+	return list_entry(list_front(&sa->semaphore.waiters), struct thread, elem)->priority > list_entry(list_front(&sb->semaphore.waiters), struct thread, elem)->priority;
 }

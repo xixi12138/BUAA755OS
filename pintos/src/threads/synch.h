@@ -10,7 +10,7 @@ struct semaphore
     unsigned value;             /* Current value. */
     struct list waiters;        /* List of waiting threads. */
   };
-
+bool cmp_priority_sema(const struct list_elem *a, const struct list_elem *b, void *aux);
 void sema_init (struct semaphore *, unsigned value);
 void sema_down (struct semaphore *);
 bool sema_try_down (struct semaphore *);
