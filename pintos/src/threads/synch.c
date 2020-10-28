@@ -208,9 +208,33 @@ lock_acquire (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
+  struct thread* cur_thread = thread_current();
+  struct lock* lk;
+  enum intr_level old_level;
 
+  if(!thread_mlfqs && lock->holder != NULL) {
+    cur_thread->lock_waitings = lock; // 设置当前线程等待的锁
+    lk = lock;
+    // 迭代地捐赠优先级, (condition: 当前线程的优先级 > 锁的优先级)
+    while(lk && cur_thread->priority > lk->max_priority) {
+      lk->max_priority = cur_thread->priority;
+      thread_donate_priority(lk->holder);
+      lk = lk->holder->lock_waitings; // 即如果当前锁还被别的锁控制着
+    }
+  }
+  // P操作, 请求锁, 阻塞然后被唤醒, 然后获得锁
   sema_down (&lock->semaphore);
-  lock->holder = thread_current ();
+  old_level = intr_disable();
+  // 被唤醒了
+  cur_thread = thread_current ();
+  if(thread_mlfqs == false) {
+    lock->max_priority = cur_thread->priority; // 当前锁的最高优先级设置
+    cur_thread->lock_waitings = NULL; // 当前线程已经获得锁了
+    thread_hold_the_lock(lock);
+  }
+
+  lock->holder = cur_thread;
+  intr_set_level(old_level);
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -243,7 +267,8 @@ lock_release (struct lock *lock)
 {
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
-
+  if (thread_mlfqs == false)
+    thread_remove_lock (lock);
   lock->holder = NULL;
   sema_up (&lock->semaphore);
 }
@@ -356,4 +381,12 @@ bool cmp_priority_sema(const struct list_elem *a, const struct list_elem *b, voi
   struct semaphore_elem *sb = list_entry (b, struct semaphore_elem, elem);
   // 比较所有信号量最高优先级的thread, 以此来确定条件变量先唤醒哪个信号量
 	return list_entry(list_front(&sa->semaphore.waiters), struct thread, elem)->priority > list_entry(list_front(&sb->semaphore.waiters), struct thread, elem)->priority;
+}
+
+
+void thread_remove_lock (struct lock *lock) {
+  enum intr_level old_level = intr_disable ();
+  list_remove (&lock->elem);
+  thread_update_priority (thread_current ());
+  intr_set_level (old_level);
 }

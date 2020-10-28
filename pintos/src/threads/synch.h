@@ -20,7 +20,11 @@ void sema_self_test (void);
 /* Lock. */
 struct lock 
   {
-    struct thread *holder;      /* Thread holding lock (for debugging). */
+    /*优先级捐赠部分加的*/
+    struct list_elem elem;  // 优先级捐赠的线程的队列
+    int max_priority;  // 请求该锁的线程中, 优先级最高的
+
+    struct thread *holder;      /* Thread holding lock (for debugging). 占有这个锁的线程*/
     struct semaphore semaphore; /* Binary semaphore controlling access. */
   };
 
@@ -29,6 +33,7 @@ void lock_acquire (struct lock *);
 bool lock_try_acquire (struct lock *);
 void lock_release (struct lock *);
 bool lock_held_by_current_thread (const struct lock *);
+void thread_remove_lock (struct lock *lock);
 
 /* Condition variable. */
 struct condition 
