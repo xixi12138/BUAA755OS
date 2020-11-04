@@ -267,8 +267,12 @@ lock_release (struct lock *lock)
 {
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
-  if (thread_mlfqs == false)
-    thread_remove_lock (lock);
+  if (thread_mlfqs == false) {
+    enum intr_level old_level = intr_disable ();
+    list_remove (&lock->elem);
+    thread_update_priority (thread_current ());
+    intr_set_level (old_level);
+  }
   lock->holder = NULL;
   sema_up (&lock->semaphore);
 }
@@ -382,12 +386,4 @@ bool cmp_priority_sema(const struct list_elem *a, const struct list_elem *b, voi
   struct semaphore_elem *sb = list_entry (b, struct semaphore_elem, elem);
   // 比较所有信号量最高优先级的thread, 以此来确定条件变量先唤醒哪个信号量
 	return list_entry(list_front(&sa->semaphore.waiters), struct thread, elem)->priority > list_entry(list_front(&sb->semaphore.waiters), struct thread, elem)->priority;
-}
-
-
-void thread_remove_lock (struct lock *lock) {
-  enum intr_level old_level = intr_disable ();
-  list_remove (&lock->elem);
-  thread_update_priority (thread_current ());
-  intr_set_level (old_level);
 }
