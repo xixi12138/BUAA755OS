@@ -381,18 +381,21 @@ void handle_blocked_threads(struct thread *t, void *aux UNUSED)
 
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void
-thread_set_priority (int new_priority)
+thread_set_priority (int n_priority)
 {
   if (thread_mlfqs) return;
 
   enum intr_level old_level = intr_disable ();
-  struct thread *current_thread = thread_current ();
-  int old_priority = current_thread->priority;
-  current_thread->base_priority = new_priority;
+  int o_priority = thread_current ()->priority;
+  thread_current ()->base_priority = n_priority;
+  int m_priority = n_priority > o_priority ? n_priority : o_priority;
+  thread_current ()->priority = m_priority;
   // 如果当前线程没有hold锁 或者 有优先级捐赠
-  if (list_empty (&current_thread->locks) || new_priority > old_priority) {
-    current_thread->priority = new_priority;
+  if (list_empty (&thread_current ()->locks)) {
+    thread_current ()->priority = n_priority;
     thread_yield ();
+  }else if(o_priority < n_priority) {
+    thread_yield();
   }
   
   intr_set_level (old_level);
