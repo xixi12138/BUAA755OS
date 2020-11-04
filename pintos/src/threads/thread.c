@@ -389,7 +389,7 @@ thread_set_priority (int new_priority)
   struct thread *current_thread = thread_current ();
   int old_priority = current_thread->priority;
   current_thread->base_priority = new_priority;
-
+  // 如果当前线程没有hold锁 或者 有优先级捐赠
   if (list_empty (&current_thread->locks) || new_priority > old_priority) {
     current_thread->priority = new_priority;
     thread_yield ();
@@ -750,9 +750,8 @@ void thread_update_priority (struct thread *t) {
   int lock_priority;
 
   if (!list_empty (&t->locks)) {
-    list_sort (&t->locks, cmp_priority_lock, NULL);
-    //lock_priority = list_entry(list_max(&t->locks, cmp_priority_lock, NULL), struct lock, elem)->max_priority;
-    lock_priority = list_entry (list_front (&t->locks), struct lock, elem)->max_priority;
+    struct list_elem * pri = list_min(&t->locks, cmp_priority_lock, NULL);
+    lock_priority = list_entry(pri, struct lock, elem)->max_priority;
     max_priority = max_priority > lock_priority ? max_priority : lock_priority;
   }
 
