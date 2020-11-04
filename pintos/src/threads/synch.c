@@ -123,10 +123,10 @@ sema_up (struct semaphore *sema)
   old_level = intr_disable ();
   if (!list_empty (&sema->waiters)) {
     // sort 然后pop掉最高优先级的, 然后unblock最高优先级的, 也可以像注释这样find max然后remove掉
-    // struct list_elem * highest_thread = list_max(&sema->waiters, higher_priority, NULL);
-    // struct list_elem * _next = list_remove(highest_thread);
-    list_sort(&sema->waiters, cmp_priority, NULL);
-    thread_unblock (list_entry (list_pop_front (&sema->waiters), struct thread, elem));
+    struct list_elem * highest_thread = list_min(&sema->waiters, cmp_priority, NULL);
+    list_remove(highest_thread);
+    // list_sort(&sema->waiters, cmp_priority, NULL);
+    thread_unblock (list_entry (highest_thread, struct thread, elem));
   }
   sema->value++;
   intr_set_level (old_level);
