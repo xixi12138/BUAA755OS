@@ -355,8 +355,9 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (lock_held_by_current_thread (lock));
 
   if (!list_empty (&cond->waiters)) {
-    list_sort(&cond->waiters, cmp_priority_sema, NULL);
-    sema_up (&list_entry (list_pop_front (&cond->waiters), struct semaphore_elem, elem)->semaphore);
+    struct list_elem * front = list_min(&cond->waiters, cmp_priority_sema, NULL);
+    list_remove(front);
+    sema_up (&list_entry (front, struct semaphore_elem, elem)->semaphore);
   }
 }
 
