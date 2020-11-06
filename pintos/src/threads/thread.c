@@ -45,6 +45,9 @@ static struct list ready_list;
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
 
+// 调用timer_sleep后被阻塞线程队列
+static struct list blocked_list;
+
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -88,6 +91,7 @@ static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
+static bool blocked_time_cmp(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -110,6 +114,7 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
+  list_init (&blocked_list);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -170,6 +175,9 @@ if(thread_mlfqs){
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
     intr_yield_on_return ();
+
+  /* 每个 time_tick 检查阻塞队列*/ 
+  handle_blocked_threads();
 }
 
 /* Prints thread statistics. */
@@ -352,6 +360,29 @@ thread_yield (void)
   intr_set_level (old_level);
 }
 
+static bool 
+blocked_time_cmp(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+  const struct thread *x = list_entry(a, struct thread, elem);
+  const struct thread *y = list_entry(b, struct thread, elem);
+
+  return x->blocked_time < y->blocked_time;
+}
+
+void 
+thread_sleep (int64_t ticks)
+{
+  enum intr_level old_level = intr_disable ();
+  
+  struct thread *cur = thread_current();
+  cur->blocked_time = ticks;
+  list_insert_ordered(&blocked_list, &cur->elem, blocked_time_cmp, NULL);
+  
+  thread_block();
+
+  intr_set_level (old_level);
+}
+
 /* Invoke function 'func' on all threads, passing along 'aux'.
    This function must be called with interrupts off. */
 void
@@ -369,7 +400,8 @@ thread_foreach (thread_action_func *func, void *aux)
     }
 }
 
-void handle_blocked_threads(struct thread *t, void *aux UNUSED)
+/* void 
+handle_blocked_threads(struct thread *t, void *aux UNUSED)
 {
   if (t->status == THREAD_BLOCKED && t->blocked_time > 0)
   {
@@ -377,6 +409,33 @@ void handle_blocked_threads(struct thread *t, void *aux UNUSED)
     if (!t->blocked_time)
       thread_unblock(t);    
   }
+} */
+
+void
+handle_blocked_threads()
+{
+  if (list_empty(&blocked_list))
+    return;
+  
+  struct list_elem *e;
+  enum intr_level old_level;
+
+  ASSERT (intr_get_level () == INTR_OFF);
+
+  for (e = list_begin (&blocked_list); e != list_end (&blocked_list);
+       e = list_next (e))
+    {
+      struct thread *t = list_entry (e, struct thread, allelem);
+      if (t ->blocked_time == 1)
+      {
+        old_level = intr_disable();
+        list_remove(e);
+        thread_unblock(t);
+        intr_set_level(old_level);
+      }
+      else
+        t->blocked_time--;
+    }
 }
 
 /* Sets the current thread's priority to NEW_PRIORITY. */

@@ -30,10 +30,23 @@ FirstName LastName <email@domain.example>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+struct thread:
+    int64_t blocked_time;
+记录线程需要阻塞的时间，每个时钟周期更新
+
 ---- ALGORITHMS ----
 
 >> A2: Briefly describe what happens in a call to timer_sleep(),
 >> including the effects of the timer interrupt handler.
+
+当调用time_sleep()程序后，首先判断参数ticks是否非负，然后断言当前未屏蔽中断
+接着屏蔽中断，保证后续语句完整执行
+接着获取当前线程，并将其需要阻塞的时间设置为ticks
+接着阻塞当前进程
+最后恢复中断
+在计时器中断处理程序中，对每个线程执行handle_blocked_threads()函数
+该函数将所有当前处于阻塞状态的线程的blocked_time自减一后判断其是否为0
+若为0，解除当前线程的阻塞状态，否则继续阻塞直至blocked_time为0
 
 >> A3: What steps are taken to minimize the amount of time spent in
 >> the timer interrupt handler?
