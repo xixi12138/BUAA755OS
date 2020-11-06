@@ -440,11 +440,26 @@ handle_blocked_threads()
 
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void
-thread_set_priority (int new_priority) 
+thread_set_priority (int n_priority)
 {
-  thread_current ()->priority = new_priority;
-  thread_yield ();
+  if (thread_mlfqs) return;
+
+  enum intr_level old_level = intr_disable ();
+  int o_priority = thread_current ()->priority;
+  thread_current ()->base_priority = n_priority;
+  int m_priority = n_priority > o_priority ? n_priority : o_priority;
+  thread_current ()->priority = m_priority;
+  // 如果当前线程没有hold锁 或者 有优先级捐赠
+  if (list_empty (&thread_current ()->locks)) {
+    thread_current ()->priority = n_priority;
+    thread_yield ();
+  }else if(o_priority < n_priority) {
+    thread_yield();
+  }
+  
+  intr_set_level (old_level);
 }
+
 
 /* Returns the current thread's priority. */
 int
@@ -455,8 +470,7 @@ thread_get_priority (void)
 
 /* Sets the current thread's nice value to NICE. */
 void
-thread_set_nice (int nice UNUSED) 
-{
+thread_set_nice (int nice UNUSED)  {
   /* Not yet implemented. */
   struct thread* cur_thread = thread_current();
   thread_current() ->nice = nice; //将新nice值赋给当前线程
@@ -466,8 +480,7 @@ thread_set_nice (int nice UNUSED)
 
 /* Returns the current thread's nice value. */
 int
-thread_get_nice (void) 
-{
+thread_get_nice (void) {
   /* 返回当前nice值*/
   return thread_current()->nice;
 }
@@ -629,6 +642,11 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
+  
+  /*priority donate*/
+  t->base_priority = priority;
+  list_init (&t->locks);
+  t->lock_waitings = NULL;
 
   old_level = intr_disable ();
   list_insert_ordered(&all_list, &t->allelem, (list_less_func *)cmp_priority, NULL);
@@ -751,6 +769,54 @@ cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNU
 	return (list_entry(a,struct thread,elem)->priority > list_entry(b,struct thread,elem)->priority);
 }
 
+/* lock comparation function */
+bool
+cmp_priority_lock(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
+   return list_entry (a, struct lock, elem)->max_priority > list_entry (b, struct lock, elem)->max_priority;
+}
+
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
+
+/* 让线程拥有一个锁 */
+void thread_hold_the_lock(struct lock *lock) {
+  enum intr_level old_level = intr_disable ();
+  // 更新当前thread所拥有的锁队列
+  list_insert_ordered (&thread_current ()->locks, &lock->elem, cmp_priority_lock, NULL);
+  struct thread* cur_thread = thread_current();
+
+  if (lock->max_priority > cur_thread->priority) {
+    cur_thread->priority = lock->max_priority;
+    thread_yield ();
+  }
+
+  intr_set_level (old_level);
+}
+
+/* 将当前的优先级priority捐赠给线程t */
+void thread_donate_priority (struct thread *t) {
+  enum intr_level old_level = intr_disable ();
+  thread_update_priority (t);
+
+  if (t->status == THREAD_READY) {
+    list_remove (&t->elem);
+    list_insert_ordered (&ready_list, &t->elem, cmp_priority, NULL);
+  }
+  intr_set_level (old_level);
+}
+
+void thread_update_priority (struct thread *t) {
+  enum intr_level old_level = intr_disable ();
+  int max_priority = t->base_priority;
+  int lock_priority;
+
+  if (!list_empty (&t->locks)) {
+    struct list_elem * pri = list_min(&t->locks, cmp_priority_lock, NULL);
+    lock_priority = list_entry(pri, struct lock, elem)->max_priority;
+    max_priority = max_priority > lock_priority ? max_priority : lock_priority;
+  }
+
+  t->priority = max_priority;
+  intr_set_level (old_level);
+}

@@ -97,6 +97,11 @@ struct thread
     struct list_elem elem;              /* List element. */
     int64_t blocked_time;
 
+    /* 优先级捐赠这部分*/
+    int base_priority;
+    struct list locks;  // 当前线程占有的锁
+    struct lock* lock_waitings; // 当前线程请求的锁, 一个锁
+
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
@@ -110,6 +115,11 @@ struct thread
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 extern bool thread_mlfqs;
+
+/*donate*/
+void thread_donate_priority (struct thread *t);
+void thread_hold_the_lock(struct lock *lock);
+bool cmp_priority_lock(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 
 void thread_init (void);
 void thread_start (void);
