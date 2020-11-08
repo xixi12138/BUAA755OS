@@ -95,6 +95,8 @@ struct thread
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
+
+    /* timer_sleep()部分 */
     int64_t blocked_time;
 
     /* 优先级捐赠这部分*/
@@ -143,7 +145,8 @@ void thread_yield (void);
 /* Performs some operation on thread t, given auxiliary data AUX. */
 typedef void thread_action_func (struct thread *t, void *aux);
 void thread_foreach (thread_action_func *, void *);
-// void handle_blocked_threads(struct thread *t, void *aux UNUSED);
+
+/* timer_sleep()部分 */
 void handle_blocked_threads(void);
 void thread_sleep(int64_t);
 

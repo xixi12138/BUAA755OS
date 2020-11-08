@@ -360,6 +360,7 @@ thread_yield (void)
   intr_set_level (old_level);
 }
 
+/* 阻塞结束时间早的在前，结束晚的在后 */
 static bool 
 blocked_time_cmp(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
 {
@@ -371,6 +372,7 @@ blocked_time_cmp(const struct list_elem *a, const struct list_elem *b, void *aux
   return x->blocked_time < y->blocked_time;
 }
 
+/* 让当前线程阻塞，并将其插入优先队列blocked_list中 */
 void 
 thread_sleep (int64_t ticks)
 { 
@@ -402,17 +404,6 @@ thread_foreach (thread_action_func *func, void *aux)
       func (t, aux);
     }
 }
-
-/* void 
-handle_blocked_threads(struct thread *t, void *aux UNUSED)
-{
-  if (t->status == THREAD_BLOCKED && t->blocked_time > 0)
-  {
-    t->blocked_time--;
-    if (!t->blocked_time)
-      thread_unblock(t);    
-  }
-} */
 
 void
 handle_blocked_threads(void)
