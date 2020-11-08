@@ -99,7 +99,6 @@ timer_sleep (int64_t ticks)
   
   // struct thread *cur = thread_current();
   // cur->blocked_time = ticks;
-  // insert_into_blocked_list(cur, blocked_list);
   thread_sleep(ticks);
   
   // intr_set_level (old_level);

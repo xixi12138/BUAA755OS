@@ -363,6 +363,8 @@ thread_yield (void)
 static bool 
 blocked_time_cmp(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
 {
+  ASSERT(a != NULL)
+  ASSERT(b != NULL)
   const struct thread *x = list_entry(a, struct thread, elem);
   const struct thread *y = list_entry(b, struct thread, elem);
 
@@ -371,15 +373,16 @@ blocked_time_cmp(const struct list_elem *a, const struct list_elem *b, void *aux
 
 void 
 thread_sleep (int64_t ticks)
-{
-  enum intr_level old_level = intr_disable ();
-  
+{ 
   struct thread *cur = thread_current();
-  cur->blocked_time = ticks;
-  list_insert_ordered(&blocked_list, &cur->elem, blocked_time_cmp, NULL);
-  
-  thread_block();
 
+  ASSERT(cur->status == THREAD_RUNNING);
+
+  cur->blocked_time = ticks + timer_ticks();
+
+  enum intr_level old_level = intr_disable ();
+  list_insert_ordered(&blocked_list, &cur->elem, blocked_time_cmp, NULL);
+  thread_block();
   intr_set_level (old_level);
 }
 
@@ -412,30 +415,32 @@ handle_blocked_threads(struct thread *t, void *aux UNUSED)
 } */
 
 void
-handle_blocked_threads()
+handle_blocked_threads(void)
 {
   if (list_empty(&blocked_list))
     return;
   
   struct list_elem *e;
+  struct list_elem *next;
   enum intr_level old_level;
 
-  ASSERT (intr_get_level () == INTR_OFF);
+  e = list_begin(&blocked_list);
+  while (e != list_end(&blocked_list))
+  {
+    next = list_next(e);
+    struct thread *t = list_entry(e, struct thread, elem);
+    if (t->blocked_time > timer_ticks())
+      break;
 
-  for (e = list_begin (&blocked_list); e != list_end (&blocked_list);
-       e = list_next (e))
+    if (t->status == THREAD_BLOCKED)
     {
-      struct thread *t = list_entry (e, struct thread, allelem);
-      if (t ->blocked_time == 1)
-      {
-        old_level = intr_disable();
-        list_remove(e);
-        thread_unblock(t);
-        intr_set_level(old_level);
-      }
-      else
-        t->blocked_time--;
+      old_level = intr_disable();
+      list_remove(e);
+      thread_unblock(t);
+      intr_set_level(old_level);
     }
+    e = next;
+  }
 }
 
 /* Sets the current thread's priority to NEW_PRIORITY. */
