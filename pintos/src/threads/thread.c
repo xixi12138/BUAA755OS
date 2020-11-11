@@ -45,6 +45,9 @@ static struct list ready_list;
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
 
+// 调用timer_sleep后被阻塞线程队列
+static struct list blocked_list;
+
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -88,6 +91,7 @@ static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
+static bool blocked_time_cmp(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -110,6 +114,7 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
+  list_init (&blocked_list);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -170,6 +175,9 @@ if(thread_mlfqs){
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
     intr_yield_on_return ();
+
+  /* 每个 time_tick 检查阻塞队列*/ 
+  handle_blocked_threads();
 }
 
 /* Prints thread statistics. */
@@ -352,6 +360,34 @@ thread_yield (void)
   intr_set_level (old_level);
 }
 
+/* 阻塞结束时间早的在前，结束晚的在后 */
+static bool 
+blocked_time_cmp(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+  ASSERT(a != NULL)
+  ASSERT(b != NULL)
+  const struct thread *x = list_entry(a, struct thread, elem);
+  const struct thread *y = list_entry(b, struct thread, elem);
+
+  return x->blocked_time < y->blocked_time;
+}
+
+/* 让当前线程阻塞，并将其插入优先队列blocked_list中 */
+void 
+thread_sleep (int64_t ticks)
+{ 
+  struct thread *cur = thread_current();
+
+  ASSERT(cur->status == THREAD_RUNNING);
+
+  cur->blocked_time = ticks + timer_ticks();
+
+  enum intr_level old_level = intr_disable ();
+  list_insert_ordered(&blocked_list, &cur->elem, blocked_time_cmp, NULL);
+  thread_block();
+  intr_set_level (old_level);
+}
+
 /* Invoke function 'func' on all threads, passing along 'aux'.
    This function must be called with interrupts off. */
 void
@@ -369,13 +405,32 @@ thread_foreach (thread_action_func *func, void *aux)
     }
 }
 
-void handle_blocked_threads(struct thread *t, void *aux UNUSED)
+void
+handle_blocked_threads(void)
 {
-  if (t->status == THREAD_BLOCKED && t->blocked_time > 0)
+  if (list_empty(&blocked_list))
+    return;
+  
+  struct list_elem *e;
+  struct list_elem *next;
+  enum intr_level old_level;
+
+  e = list_begin(&blocked_list);
+  while (e != list_end(&blocked_list))
   {
-    t->blocked_time--;
-    if (!t->blocked_time)
-      thread_unblock(t);    
+    next = list_next(e);
+    struct thread *t = list_entry(e, struct thread, elem);
+    if (t->blocked_time > timer_ticks())
+      break;
+
+    if (t->status == THREAD_BLOCKED)
+    {
+      old_level = intr_disable();
+      list_remove(e);
+      thread_unblock(t);
+      intr_set_level(old_level);
+    }
+    e = next;
   }
 }
 
