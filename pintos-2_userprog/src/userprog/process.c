@@ -38,15 +38,18 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
+  char *t_name, *tok_ptr;
+  t_name = strtok_r(file_name, " ", &tok_ptr);
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (t_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+    palloc_free_page (fn_copy);
   return tid;
 }
 
 /* A thread function that loads a user process and starts it
    running. */
+// pintos -k -T 60 –bochs –filesys-size=2 -p ../tests/userprog/args-single.ck -a args-single -- -q -f run 'args-single onearg'
 static void
 start_process (void *file_name_)
 {
@@ -59,13 +62,42 @@ start_process (void *file_name_)
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (file_name, &if_.eip, &if_.esp);
+  char *t_name = NULL, *tok_ptr = NULL;
+  t_name = strtok_r(file_name, " ", &tok_ptr);
+  success = load (t_name, &if_.eip, &if_.esp);
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success) 
     thread_exit ();
 
+  char *esp = (char *)if_.esp;
+  char *argv[256];
+  int argc = 0;
+  while (t_name != NULL)
+  {
+    esp -= strlen(t_name) + 1;
+    strlcpy(esp, t_name, strlen(t_name)+2);
+    argv[argc++] = esp;
+    printf("%d : %s\n", argc, argv[argc]);
+    t_name = strtok_r(NULL, " ", &tok_ptr);
+  }
+
+  while ((int)esp % 4)
+    esp--;
+
+  int *p = esp - 4;
+  *p-- = 0;
+  for (int i = argc - 1; i >= 0; i--)
+    *p-- = (int *)argv[i];
+  
+  *p-- = p + 1;
+  *p-- = argc;
+  *p-- = 0;
+  esp = p + 1;
+  
+  if_.esp = esp;
+  palloc_free_page(file_name);
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
