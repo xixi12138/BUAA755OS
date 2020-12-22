@@ -32,7 +32,7 @@ int mmap (int fd, void *vaddr)
   if (length == 0)
     return -1;
   num_pages = ((size_t) pg_round_up ((const void *) length)) / PGSIZE;
-  /* Do not allow mapping to the space reserved for the stack. */
+  
   for (upage = vaddr, i = 0; i < num_pages; i++, upage += PGSIZE)
     if (pagedir_get_info (cur->pagedir, upage) != NULL
         || is_stack_access (upage))
@@ -46,7 +46,7 @@ int mmap (int fd, void *vaddr)
       file_close (file);
       return -1;
     }
-  /* Map in the file. */
+  /* 映射文件 */
   for (upage = vaddr, i = 0; i < num_pages; i++, upage += PGSIZE)
     {
       page_info = pageinfo_create ();
@@ -71,7 +71,7 @@ int mmap (int fd, void *vaddr)
       num_pages = i;
       for (upage = vaddr, i = 0; i < num_pages; i++, upage += PGSIZE)
         {
-          /* The frame table will free the page info and clear the entry. */
+          /* 帧表释放页表与页信息 */
           frametable_unload_frame (cur->pagedir, upage);
         }
       file_close (file);
@@ -79,7 +79,7 @@ int mmap (int fd, void *vaddr)
     }
   return md;
 }
-
+/* 释放映射文件*/
 void munmap (int md)
 {
   struct thread *cur = thread_current ();
@@ -106,7 +106,7 @@ allocate_md (void *upage, struct file *file, size_t num_pages)
   struct thread *cur = thread_current ();
   int md = -1;
 
-  /* Allocate the first available map descriptor. */
+  /* 分配第一个可用的映射描述符*/
   for (md = 0; md < MAX_MMAP_FILES; md++)
     if (cur->mfiles[md].file == NULL)
       break;
