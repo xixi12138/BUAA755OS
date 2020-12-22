@@ -1,7 +1,3 @@
-<<<<<<< HEAD
-
-src/userprog/filesys\.dsk
-=======
 /pintos/src/vm/build/*
 
 # OS generated files #
@@ -13,4 +9,3 @@ src/userprog/filesys\.dsk
 .Trashes
 ehthumbs.db
 Thumbs.db
->>>>>>> 9b6af17cd3c95e6be0c8172bce68309047c4fb58
