@@ -12,7 +12,7 @@
 static int
 allocate_md (void *upage, struct file *file, size_t num_pages);
 
-/* Maps a file into the user address space starting at virtual address VADDR. */
+/* 从虚拟地址空间 VADDR.映射文件到用户地址空间 */
 int mmap (int fd, void *vaddr)
 {
   struct thread *cur = thread_current ();
