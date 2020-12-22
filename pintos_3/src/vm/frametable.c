@@ -15,83 +15,51 @@
 #include "filesys/file.h"
 #include "filesys/inode.h"
 #include "filesys/filesys.h"
-/* Additional file information, only relevant if the page is backed by a 
-   file. */
-struct file_info
-{
+
+struct file_info {
   struct file *file;
-  /* The file offset of the end of the mapped region.  It's used to
-     calculate the start offset and the size of the region.
-  */
   off_t end_offset;
 };
 
-static inline off_t offset (off_t end_offset)
-{
+static inline off_t offset (off_t end_offset) {
   return end_offset > 0  ? (end_offset - 1) & ~PGMASK : 0;
 }
 
-static inline off_t size (off_t end_offset)
-{
+static inline off_t size (off_t end_offset) {
   return end_offset - offset (end_offset);
 }
 
-/* Additional information associated with user pages. */
+/* 用户页表信息 */
 struct page_info
 {
   uint8_t type;
   uint8_t writable;
-  /* The page directory that is mapping the page. */
   uint32_t *pd;
-  /* The user virtual page address corresponding to the page. */
-  const void *upage;
-  /* If true the page is swapped and its contents can be read back
-     from swap_sector. */
-  bool swapped;
-  /* Information about the frame backing the page. */
-  struct frame *frame;
-  /* Depending on the type this can be information about the backing file, the 
-     swap block if the page is swapped out, or the kernel virtual page address
-     of content to to initialize the page with. */
+  const void *upage; // 用户的virtual address
+  bool swapped; // 如果为true，就说明page在交换空间内，能够被交换区读取
+  struct frame *frame; // page关联的frame
   union
   {
-    struct file_info file_info;
-    block_sector_t swap_sector;
-    const void *kpage;
+    struct file_info file_info; // page 关联的文件信息
+    block_sector_t swap_sector; // 所在的交换区
+    const void *kpage; 
   } data;
-  /* List element for the associated frame's page_info_list. */
   struct list_elem elem;
 };
 
-/* Information associated with each frame. */
-struct frame
-{
-  /* The kernal virtual page address corresponding to the physical frame. */
-  void *kpage;
-  /* List of information about each page that is mapped to this frame. */
-  struct list page_info_list;
-  /* If greater than zero the frame is locked and will not be evicted. */
-  unsigned short lock;
-  /* If true, data is being read to or written from this frame. */
+struct frame {
+  void *kpage; // 帧页关联的kernal virtual page 
+  struct list page_info_list; // 与这个frame关联的所有page
+  unsigned short lock; //
   bool io;
   struct condition io_done;
-  /* Hash element for read_only_frames. */
   struct hash_elem hash_elem;
   struct list_elem list_elem;
 };
 
-/* Lock used for manipullating internal data structures. */
 static struct lock frame_lock;
-/* Cache of read-only file frames indexed by inode and offset. */
-static struct hash read_only_frames;
-/* List of frames that are potentially available for for eviction.
-   This is treated as a circular list with clock hand pointing 
-   to the beginning of the list.  Frames are always added to the
-   end of the list. */
-static struct list frame_list;
-/* The hand of the clock for the clock page replacement algorithm
-   which is used for choosing a frame to evict. The clock hand 
-   points to the next frame to examine. */
+static struct hash read_only_frames; 
+static struct list frame_list; // 循环链表
 static struct list_elem *clock_hand;
 
 static void frame_init (struct frame *frame);
@@ -102,62 +70,49 @@ static void map_page (struct page_info *page_info, struct frame *frame,
                       const void *upage);
 static void wait_for_io_done (struct frame **frame);
 static struct frame *lookup_read_only_frame (struct page_info *page_info);
-static void *evict_frame (void);
-static void *get_frame_to_evict (void);
+static void *evict_frame (void); // 驱逐页帧
+static void *get_frame_to_evict (void); //
 static unsigned frame_hash (const struct hash_elem *e, void *aux UNUSED);
 static bool frame_less (const struct hash_elem *a, const struct hash_elem *b,
                         void *aux UNUSED);
 
-struct page_info *
-pageinfo_create (void)
-{
+/* 创建页 */
+struct page_info * pageinfo_create (void) {
   struct page_info *page_info;
-  
   page_info = calloc (1, sizeof *page_info);
   return page_info;
 }
 
-void
-pageinfo_destroy (struct page_info *page_info)
-{
+/* 删除页 */
+void pageinfo_destroy (struct page_info *page_info) {
   free (page_info);
 }
 
-void
-pageinfo_set_upage (struct page_info *page_info, const void *upage)
-{
+/* 分配用户页 */
+void pageinfo_set_upage (struct page_info *page_info, const void *upage) {
   page_info->upage = upage;
 }
 
-void
-pageinfo_set_type (struct page_info *page_info, int type)
-{
+/* 分配用户页 */
+void pageinfo_set_type (struct page_info *page_info, int type) {
   page_info->type = type;
 }
 
-void
-pageinfo_set_writable (struct page_info *page_info, int writable)
-{
+void pageinfo_set_writable (struct page_info *page_info, int writable) {
   page_info->writable = writable;
 }
 
-void
-pageinfo_set_pagedir (struct page_info *page_info, uint32_t *pd)
-{
+void pageinfo_set_pagedir (struct page_info *page_info, uint32_t *pd) {
   page_info->pd = pd;
 }
 
-void
-pageinfo_set_fileinfo (struct page_info *page_info, struct file *file,
-                       off_t end_offset)
-{
+void pageinfo_set_fileinfo (struct page_info *page_info, struct file *file, off_t end_offset) {
   page_info->data.file_info.file = file;
   page_info->data.file_info.end_offset = end_offset;
 }
 
 void
-pageinfo_set_kpage (struct page_info *page_info, const void *kpage)
-{
+pageinfo_set_kpage (struct page_info *page_info, const void *kpage) {
   page_info->data.kpage = kpage;
 }
 
@@ -170,21 +125,15 @@ frametable_init (void)
   hash_init (&read_only_frames, frame_hash, frame_less, NULL);
 }
 
-/* Reads data into a frame from the appropriate place and maps the
-   user virtual page UPAGE to it.  If WRITE is true, the page will be
-   mapped as read/write. */
 bool
 frametable_load_frame (uint32_t *pd, const void *upage, bool write)
 {
   return load_frame (pd, upage, write, false);
 }
 
-/* Unmaps the frame mapped by UPAGE, writes out any modified data to the 
-   appropriate place, and frees all resources associated with the 
-   the frame and the page info. */
+/* 在进程退出的时候调用 */
 void
-frametable_unload_frame (uint32_t *pd, const void *upage)
-{
+frametable_unload_frame (uint32_t *pd, const void *upage) {
   struct page_info *page_info, *p;
   struct file_info *file_info;
   void *kpage;
@@ -197,9 +146,6 @@ frametable_unload_frame (uint32_t *pd, const void *upage)
   if (page_info == NULL)
     return;
   lock_acquire (&frame_lock);
-  /* It's possible the frame could be in the process of being evicted.
-     If so, wait for eviction to finish before continuing. When 
-     wait_for_io_done returns, frame_lock will be held. */
   wait_for_io_done (&page_info->frame);
   if (page_info->frame != NULL)
     {
@@ -222,10 +168,6 @@ frametable_unload_frame (uint32_t *pd, const void *upage)
         {
           ASSERT (list_entry (list_begin (&frame->page_info_list),
                               struct page_info, elem) == page_info);
-          /* Don't remove the page info from the frame's list until
-             the frame is removed from the cache because in order to
-             lookup the frame for removal it needs to have a page info
-             in its list. */
           if (page_info->type & PAGE_TYPE_FILE && page_info->writable == 0)
             hash_delete (&read_only_frames, &frame->hash_elem);
           if (clock_hand == &frame->list_elem)
@@ -238,10 +180,7 @@ frametable_unload_frame (uint32_t *pd, const void *upage)
           list_remove (&frame->list_elem);
         }
       pagedir_clear_page (page_info->pd, upage);
-      /* At this point the frame has been removed from the shared data
-         structures and it's safe to release the lock and, if necessary,
-         free the resources associated with the frame. */
-      lock_release (&frame_lock);
+      lock_release (&frame_lock); // 在检脏数据前一定要将frame从数据结构中移除掉，不然其他进程可能会修改数据
       if (list_empty (&frame->page_info_list))
         {
           if (page_info->writable & WRITABLE_TO_FILE
@@ -262,7 +201,6 @@ frametable_unload_frame (uint32_t *pd, const void *upage)
     }
   else
     lock_release (&frame_lock);
-  /* Free resources associated with page info. */
   if (page_info->swapped)
     {
       swap_release (page_info->data.swap_sector);
@@ -270,8 +208,6 @@ frametable_unload_frame (uint32_t *pd, const void *upage)
     }
   else if (page_info->type & PAGE_TYPE_KERNEL)
     {
-      /* If it's a kernel page, it must not have been loaded in
-         because if it was it would be a zero page. */
       kpage = (void *) page_info->data.kpage;
       ASSERT (kpage != NULL);
       palloc_free_page (kpage);
@@ -281,16 +217,11 @@ frametable_unload_frame (uint32_t *pd, const void *upage)
   free (page_info);
 }
 
-/* Identical to frametale_load_frame with the exception that,
-   upon return, the frame is locked to prevent it from being evicted. */
-bool
-frametable_lock_frame(uint32_t *pd, const void *upage, bool write)
+bool frametable_lock_frame(uint32_t *pd, const void *upage, bool write) 
 {
   return load_frame (pd, upage, write, true);
 }
 
-/* Unlocks a frame that was locked with frametable_lock_frame.  NOTE:
-   the frame is not unloaded, only unlocked. */
 void
 frametable_unlock_frame(uint32_t *pd, const void *upage)
 {
@@ -315,19 +246,11 @@ load_frame (uint32_t *pd, const void *upage, bool write, bool keep_locked)
   void *kpage;
   off_t bytes_read;
   bool success = false;
-
-  /* Only holds the frame lock when modifying shared data structures.  Releases
-     the lock when doing a I/O operations so other processes can load frames
-     that don't require I/O without having to wait. */
   ASSERT (is_user_vaddr (upage));
   page_info = pagedir_get_info (pd, upage);
   if (page_info == NULL || (write && page_info->writable == 0))
     return false;
   lock_acquire (&frame_lock);
-  /* It's possible the frame could be in the process of being evicted.
-     If so, wait for eviction to finish before continuing. When 
-     wait_for_io_done returns, frame_lock will be held and frame will be
-     NULL. */
   wait_for_io_done (&page_info->frame);
   ASSERT (page_info->frame == NULL || keep_locked);
   if (page_info->frame != NULL)
@@ -337,34 +260,24 @@ load_frame (uint32_t *pd, const void *upage, bool write, bool keep_locked)
       lock_release (&frame_lock);
       return true;
     }
-  /* Attempt to satisfy a read only page by looking it up in the 
-     cache. */
   if (page_info->type & PAGE_TYPE_FILE
       && page_info->writable == 0)
     {
       frame = lookup_read_only_frame (page_info);
       if (frame != NULL)
         {
-          /* Make sure to map the page before releasing the lock.  If not,
-             it's possible that frame could be freed if the final process 
-             that maps the frame exits. */
           map_page (page_info, frame, upage);
-          /* If another process is loading the frame in, wait for it to
-             finish.  Lock the frame so it won't get evicted right
-             after it's loaded in and before the page is mapped. */
           frame->lock++;
           wait_for_io_done (&frame);
           frame->lock--;
           success = true;
         }
     }
-  /* Fill a new frame. */
   if (frame == NULL)
     {
       frame = allocate_frame ();
       if (frame != NULL)
         {
-          /* Map page to frame and read the data in. */
           map_page (page_info, frame, upage);
           if (page_info->swapped || page_info->type & PAGE_TYPE_FILE)
             {
@@ -380,10 +293,6 @@ load_frame (uint32_t *pd, const void *upage, bool write, bool keep_locked)
                 {
                   if (page_info->writable == 0)
                     {
-                      /* Add the read only frame to the cache before the data is read
-                         from the file to ensure that the next process that tries to
-                         read it in will wait for the read to complete instead of 
-                         reading the same data into a new frame. */
                       hash_insert (&read_only_frames, &frame->hash_elem);
                     }
                   file_info = &page_info->data.file_info;
@@ -406,10 +315,8 @@ load_frame (uint32_t *pd, const void *upage, bool write, bool keep_locked)
               memcpy (frame->kpage, kpage, PGSIZE);
               palloc_free_page (kpage);
               page_info->data.kpage = NULL;
-              /* Change to a zero page now that the data has been copied in. */
               page_info->type = PAGE_TYPE_ZERO;
             }
-          /* else zero page */
           success = true;
         }
     }
@@ -440,8 +347,6 @@ allocate_frame (void)
         {
           frame_init (frame);
           frame->kpage = kpage;
-          /* Add the frame to the end of the list so it becomes eligible 
-             for eviction. */
           if (!list_empty (&frame_list))
             list_insert (clock_hand, &frame->list_elem);
           else
@@ -459,12 +364,11 @@ allocate_frame (void)
 }
 
 static void
-map_page (struct page_info *page_info, struct frame *frame, const void *upage)
+map_page (struct page_info *page_info, struct frame *frame, const void *upage) 
 {
   page_info->frame = frame;
   list_push_back (&frame->page_info_list, &page_info->elem);
-  pagedir_set_page (page_info->pd, upage, frame->kpage,
-                    page_info->writable != 0);
+  pagedir_set_page (page_info->pd, upage, frame->kpage, page_info->writable != 0);
   pagedir_set_dirty (page_info->pd, upage, false);
   pagedir_set_accessed (page_info->pd, upage, true);
 }
@@ -476,7 +380,6 @@ wait_for_io_done (struct frame **frame)
     cond_wait (&(*frame)->io_done, &frame_lock);
 }
 
-/* Evicts and returns a free frame. */
 static void *
 evict_frame (void)
 {
@@ -494,19 +397,8 @@ evict_frame (void)
     {
       page_info = list_entry (e, struct page_info, elem);
       dirty = dirty || pagedir_is_dirty (page_info->pd, page_info->upage);
-      /* Make sure to cause page faults before the data is written out or
-         else it's possible for a process to be writing to memory as the
-         data is being written or swapped. This could result in lost data. */
       pagedir_clear_page (page_info->pd, page_info->upage);
-      /* Make sure to set the frame to NULL in page_info after swapping or
-         writing the data.  Both load and unload_frame need the frame to wait
-         until evicition is finished.  If not, it's possible for the file 
-         to be closed or the swap sector to be released while the frame is 
-         still being evicted. */
     }
-  /* If a frame is writable to swap, it doesn't matter whether or not the
-     frame is dirty it must be written to swap.  There is no other place aside
-     from swap to read the data back into a frame. */
   if (dirty || page_info->writable & WRITABLE_TO_SWAP)
     {
       ASSERT (page_info->writable != 0);
@@ -554,11 +446,6 @@ evict_frame (void)
   return frame;
 }
 
-/* Implementation of the clock page replacement algorithm. A list of frames
-   is maintained for eviction.  The "clock hand" points to the next frame to 
-   examine.  A frame is eligible for eviction if the access bit is set and it's
-   not locked.  If the page is not eligible the access bit is cleared and the
-   next frame is examined.  In both cases, the clock hand is moved forward. */ 
 static void *
 get_frame_to_evict (void)
 {
@@ -596,7 +483,6 @@ get_frame_to_evict (void)
     } while (!found && frame != start);
   if (found == NULL)
     {
-      /* Iterated through the entire list and ended up back at the start. */
       ASSERT (frame == start);
       if (frame->lock > 0)
         PANIC ("no frame available for eviction");
@@ -629,7 +515,7 @@ frame_hash (const struct hash_elem *e, void *aux UNUSED)
   block_sector_t sector;
 
   ASSERT (!list_empty (&frame->page_info_list));
-  page_info = list_entry (list_front (&frame->page_info_list),
+  page_info = list_entry (list_front (&frame->page_info_list), // 取出第一个page
                           struct page_info, elem);
   ASSERT (page_info->type & PAGE_TYPE_FILE && page_info->writable == 0);
   sector = inode_get_inumber (file_get_inode (page_info->data.file_info.file));
